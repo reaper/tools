@@ -22,6 +22,10 @@ OptionParser.new do |opts|
     options[:destination] = d
   end
 
+  opts.on("-n", "--[no-]check-duplicates", "No check for duplicates") do |n|
+    options[:no_check_duplicates] = n
+  end
+
   opts.on("-v", "--[no-]verbose", "Run verbosely") do |v|
     options[:verbose] = v
   end
@@ -40,11 +44,14 @@ unless options.destination
   exit 0
 end
 
+unless options.no_check_duplicates
+  options.no_check_duplicates = false
+end
 
 ## Copy images from a source directory to a destination directory
 # source_folder
 # destination_folder
-def copy_images_from_source_to_destination source_folder, destination_folder
+def copy_images_from_source_to_destination source_folder, destination_folder, check_for_duplicates
   # Check existing folders
   unless File.exists?(destination_folder)
     destination_path = Pathname.new(destination_folder)
@@ -88,7 +95,7 @@ def copy_images_from_source_to_destination source_folder, destination_folder
     index = -1
   end
 
-  puts "\nLast file path: #{File.basename(last_file)}\n\n" if last_file && File.exist?(last_file)
+  puts "\nLast file path: #{File.basename(last_file)}\n" if last_file && File.exist?(last_file)
 
   source_files = Dir.glob(File.join(source_file.realpath, '*'))
   source_files = source_files.sort_by{ |f| File.mtime(f) }
@@ -99,31 +106,35 @@ def copy_images_from_source_to_destination source_folder, destination_folder
     file = Pathname.new(f)
 
     if file.directory?
-      copy_images_from_source_to_destination file.realpath.to_s, File.join(destination_file.realpath.to_s, file.basename.to_s)
+      copy_images_from_source_to_destination file.realpath.to_s, File.join(destination_file.realpath.to_s, file.basename.to_s), check_for_duplicates
     else
       if %w(.png .jpg .jpeg .gif .bmp).include?(file.extname.to_s.downcase)
+        puts "-> Analyzing image #{file.realpath}"
         image = Image.read(file.realpath).first
 
-        for dest_file in Dir.glob(File.join(destination_file.realpath, '*'))
-          dest_image = Image.read(dest_file).first
+        if check_for_duplicates
+          for dest_file in Dir.glob(File.join(destination_file.realpath, '*'))
+            dest_image = Image.read(dest_file).first
 
-          begin
-            diff_img, diff_metric = image.compare_channel(dest_image, Magick::MeanSquaredErrorMetric)
-          rescue
-            diff_metric = 1
-          end
+            begin
+              puts "-> Comparing #{file.realpath} and #{dest_file}"
+              diff_img, diff_metric = image.compare_channel(dest_image, Magick::MeanSquaredErrorMetric)
+            rescue
+              diff_metric = 1
+            end
 
-          if diff_metric == 0.0
-            duplicate_img = dest_file
-            break
+            if diff_metric == 0.0
+              duplicate_img = dest_file
+              break
+            end
+
+            diff_img.destroy! if diff_img
+            dest_image.destroy!
           end
-          diff_img.destroy!
-          dest_image.destroy!
         end
 
         unless duplicate_img
           time = DateTime.parse(image.properties['date:modify'])
-
           ordered_source_files << [file, time]
         else
           puts "-> #{File.basename(f)} has a duplicate in the destination directory: #{File.basename(duplicate_img)}"
@@ -136,7 +147,7 @@ def copy_images_from_source_to_destination source_folder, destination_folder
     end
   end
 
-  puts "Copying pictures to #{destination_file.realpath}" if ordered_source_files.any?
+  puts "\nCopying pictures to #{destination_file.realpath}" if ordered_source_files.any?
   for f_list in ordered_source_files.sort_by {|l| l.last}
     file = f_list.first
     time = f_list.last
@@ -155,4 +166,4 @@ def copy_images_from_source_to_destination source_folder, destination_folder
   end
 end
 
-copy_images_from_source_to_destination options.source, options.destination
+copy_images_from_source_to_destination options.source, options.destination, !options.no_check_duplicates
