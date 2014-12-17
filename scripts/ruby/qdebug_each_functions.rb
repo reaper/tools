@@ -25,7 +25,7 @@ if options.file
   file = Pathname.new options.file
   content = file.read
   modified_content = content.gsub(/(.*\:\:.*\(.*\).*)\s*\{/, '\\&
-  qDebug() << \'\\1\'
+  qDebug() << \'\\1\';
 ')
   file.write(modified_content)
 else
