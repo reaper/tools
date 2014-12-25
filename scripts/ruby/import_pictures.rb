@@ -80,9 +80,9 @@ def copy_images_from_source_to_destination source_folder, destination_folder, ch
   source_file = Pathname.new(source_folder)
   destination_file = Pathname.new(destination_folder)
 
-  # Getting destination files and sort them by modified time a second time
+  # Getting destination files and sort them by modified time and name
   destination_files = Dir.glob(File.join(destination_file.realpath, '*'))
-  destination_files = destination_files.sort_by{ |f| File.mtime(f) }
+  destination_files = destination_files.sort_by!{ |f| [File.mtime(f), File.basename(f)] }
 
   last_file = destination_files.last
 
@@ -161,7 +161,8 @@ def copy_images_from_source_to_destination source_folder, destination_folder, ch
       File.utime(File.atime(final_file_path), time.to_time, final_file_path)
       index = final_index
     else
-      puts "-> File #{final_file_path} already exists."
+      puts "-> File #{final_file_path} already exists. Aborting."
+      break
     end
   end
 end
