@@ -1,3 +1,4 @@
+#!/usr/bin/env ruby
 # Import pictures from a folder to another
 # Author::  Pierre FILSTROFF (mailto:pfilstroff@gmail.com)
 

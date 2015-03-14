@@ -1,4 +1,5 @@
-# Import pictures from a folder to another
+#!/usr/bin/env ruby
+# Add qDebug in each functions in a afile
 # Author::  Pierre FILSTROFF (mailto:pfilstroff@gmail.com)
 
 require 'optparse'
