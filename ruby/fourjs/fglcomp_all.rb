@@ -2,23 +2,43 @@
 # Compile sources in a folder and try to link them
 # Author::  Pierre FILSTROFF (mailto:pfilstroff@gmail.com)
 
-current_path = Dir.pwd
-libs = []
+require_relative "lib/fgl/main.rb"
+require_relative "lib/fgl/form.rb"
 
-for file in Dir.glob(File.join(current_path, "*"))
-  file_name = File.basename(file)
-  file_ext = File.extname(file_name)
+## Process folder and compile all genero source files
+def process_folder folder, mains, forms
+  for file in Dir.glob(File.join(folder, "*"))
+    if File.directory?(file)
+      process_folder file, mains, forms
+    else
+      file_name = File.basename(file)
+      file_ext = File.extname(file_name)
 
-  if file_ext.eql?(".4gl")
-    system "fglcomp ".concat(file_name)
+      if file_ext.eql?(".4gl")
+        file_content = File.read(file)
 
-    main_file = file if File.read(file).scan(/main/i).flatten.any?
-    libs << file
-  elsif file_ext.eql?(".per")
-    system "fglform ".concat(file_name)
+        if file_content.scan(/end\smain/i).flatten.any?
+          mains << Fgl::Main.new(file)
+        end
+      elsif file_ext.eql?(".per")
+        forms << Fgl::Form.new(file)
+      end
+    end
   end
+
 end
 
-if main_file
-  system "fgllink -o #{File.basename(main_file, File.extname(main_file))} #{libs.map {|l| File.basename(l) }.join(" ")}"
+
+mains = []
+forms = []
+
+process_folder(Dir.pwd, mains, forms)
+
+for form in forms
+  form.compile
+end
+
+for main in mains
+  main.compile
+  main.link
 end
