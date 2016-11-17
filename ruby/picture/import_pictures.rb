@@ -6,25 +6,37 @@ require 'pathname'
 require 'ostruct'
 require 'optparse'
 require 'fileutils'
-require 'RMagick'
+require 'rmagick'
 require 'date'
+require "byebug"
 
 include Magick
+
+module Sort
+  MODIFIED = "modified"
+  CREATED = "created"
+  NAME = "name"
+end
+
 
 options = {}
 OptionParser.new do |opts|
   opts.banner = "Usage: example.rb [options]"
 
-  opts.on("-sSOURCE", "--source=SOURCE", "source") do |s|
+  opts.on("-s SOURCE", "--source=SOURCE", "source") do |s|
     options[:source] = s
   end
 
-  opts.on("-dDESTINATION", "--destination=DESTINATION", "destination") do |d|
+  opts.on("-d DESTINATION", "--destination=DESTINATION", "destination") do |d|
     options[:destination] = d
   end
 
   opts.on("-n", "--[no-]check-duplicates", "No check for duplicates") do |n|
     options[:no_check_duplicates] = n
+  end
+
+  opts.on("-t SORT", "--sort=SORT", "Sort source files [modified, created, name]") do |s|
+    options[:sort] = s
   end
 
   opts.on("-v", "--[no-]verbose", "Run verbosely") do |v|
@@ -49,10 +61,14 @@ unless options.no_check_duplicates
   options.no_check_duplicates = false
 end
 
+unless options.sort
+  options.sort = Sort::MODIFIED
+end
+
 ## Copy images from a source directory to a destination directory
 # source_folder
 # destination_folder
-def copy_images_from_source_to_destination source_folder, destination_folder, check_for_duplicates
+def copy_images_from_source_to_destination source_folder, destination_folder, sort, check_for_duplicates
   # Check existing folders
   unless File.exists?(destination_folder)
     destination_path = Pathname.new(destination_folder)
@@ -99,7 +115,8 @@ def copy_images_from_source_to_destination source_folder, destination_folder, ch
   puts "\nLast file path: #{File.basename(last_file)}\n" if last_file && File.exist?(last_file)
 
   source_files = Dir.glob(File.join(source_file.realpath, '*'))
-  source_files = source_files.sort_by{ |f| File.mtime(f) }
+  source_files = source_files.sort_by do |f|
+  end
   ordered_source_files = []
 
   puts "\nAnalyzing pictures and checking for duplicates..." if source_files.any?
@@ -107,7 +124,7 @@ def copy_images_from_source_to_destination source_folder, destination_folder, ch
     file = Pathname.new(f)
 
     if file.directory?
-      copy_images_from_source_to_destination file.realpath.to_s, File.join(destination_file.realpath.to_s, file.basename.to_s), check_for_duplicates
+      copy_images_from_source_to_destination file.realpath.to_s, File.join(destination_file.realpath.to_s, file.basename.to_s), sort, check_for_duplicates
     else
       if %w(.png .jpg .jpeg .gif .bmp).include?(file.extname.to_s.downcase)
         puts "-> Analyzing image #{file.realpath}"
@@ -135,8 +152,15 @@ def copy_images_from_source_to_destination source_folder, destination_folder, ch
         end
 
         unless duplicate_img
-          time = DateTime.parse(image.properties['date:modify'])
-          ordered_source_files << [file, time]
+          case sort
+          when Sort::MODIFIED
+            img_sort = DateTime.parse(image.properties['date:modify'])
+          when Sort::CREATED
+            img_sort = DateTime.parse(image.properties['date:create'])
+          when Sort::NAME
+            img_sort = File.basename(file, File.extname(file))
+          end
+          ordered_source_files << [file, image.properties, img_sort]
         else
           puts "-> #{File.basename(f)} has a duplicate in the destination directory: #{File.basename(duplicate_img)}"
         end
@@ -150,8 +174,9 @@ def copy_images_from_source_to_destination source_folder, destination_folder, ch
 
   puts "\nCopying pictures to #{destination_file.realpath}" if ordered_source_files.any?
   for f_list in ordered_source_files.sort_by {|l| l.last}
-    file = f_list.first
-    time = f_list.last
+    file = f_list[0]
+    properties = f_list[1]
+    time = DateTime.parse properties['date:modify']
 
     final_index = index + 1
     final_file_basename = "#{destination_file.basename.to_s.gsub(/\W/, '_').upcase}_#{time.strftime('%Y-%m-%d')}_#{final_index}#{file.extname}"
@@ -168,4 +193,4 @@ def copy_images_from_source_to_destination source_folder, destination_folder, ch
   end
 end
 
-copy_images_from_source_to_destination options.source, options.destination, !options.no_check_duplicates
+copy_images_from_source_to_destination options.source, options.destination, options.sort, !options.no_check_duplicates
