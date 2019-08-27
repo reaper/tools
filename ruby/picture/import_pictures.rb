@@ -8,6 +8,7 @@ require 'optparse'
 require 'fileutils'
 require 'RMagick'
 require 'date'
+require 'parallel'
 
 include Magick
 
@@ -25,6 +26,10 @@ OptionParser.new do |opts|
 
   opts.on("-n", "--[no-]check-duplicates", "No check for duplicates") do |n|
     options[:no_check_duplicates] = n
+  end
+
+  opts.on("-k", "--dry-run", "Dry run, no operation is done") do |k|
+    options[:dry_run] = k
   end
 
   opts.on("-v", "--[no-]verbose", "Run verbosely") do |v|
@@ -52,7 +57,7 @@ end
 ## Copy images from a source directory to a destination directory
 # source_folder
 # destination_folder
-def copy_images_from_source_to_destination source_folder, destination_folder, check_for_duplicates
+def copy_images_from_source_to_destination source_folder, destination_folder, check_for_duplicates, dry_run
   # Check existing folders
   unless File.exists?(destination_folder)
     destination_path = Pathname.new(destination_folder)
@@ -102,6 +107,7 @@ def copy_images_from_source_to_destination source_folder, destination_folder, ch
   source_files = source_files.sort_by{ |f| File.mtime(f) }
   ordered_source_files = []
 
+
   puts "\nAnalyzing pictures and checking for duplicates..." if source_files.any?
   for f in source_files
     file = Pathname.new(f)
@@ -110,11 +116,14 @@ def copy_images_from_source_to_destination source_folder, destination_folder, ch
       copy_images_from_source_to_destination file.realpath.to_s, File.join(destination_file.realpath.to_s, file.basename.to_s), check_for_duplicates
     else
       if %w(.png .jpg .jpeg .gif .bmp).include?(file.extname.to_s.downcase)
-        puts "-> Analyzing image #{file.realpath}"
-        image = Image.read(file.realpath).first
 
         if check_for_duplicates
-          for dest_file in Dir.glob(File.join(destination_file.realpath, '*'))
+          puts "-> Analyzing image #{file.realpath}"
+          image = Image.read(file.realpath).first
+
+          source_files_mutex = Mutex.new
+
+          Parallel.each(Dir.glob(File.join(destination_file.realpath, '*')), in_processes: 10) do |dest_file|
             dest_image = Image.read(dest_file).first
 
             begin
@@ -124,24 +133,23 @@ def copy_images_from_source_to_destination source_folder, destination_folder, ch
               diff_metric = 1
             end
 
-            if diff_metric == 0.0
-              duplicate_img = dest_file
-              break
-            end
-
             diff_img.destroy! if diff_img
             dest_image.destroy!
+
+            # If no duplicate
+            unless diff_metric == 0.0
+              time = DateTime.parse(image.properties['date:modify'])
+              source_files_mutex.synchronize do
+                ordered_source_files << [file, time]
+              end
+            else
+              puts "-> #{File.basename(f)} has a duplicate in the destination directory: #{File.basename(dest_file)}"
+              raise Parallel::Break
+            end
           end
-        end
 
-        unless duplicate_img
-          time = DateTime.parse(image.properties['date:modify'])
-          ordered_source_files << [file, time]
-        else
-          puts "-> #{File.basename(f)} has a duplicate in the destination directory: #{File.basename(duplicate_img)}"
+          image.destroy!
         end
-
-        image.destroy!
       else
         puts "-> Cannot process #{File.basename(f)}: not an image"
       end
@@ -158,8 +166,12 @@ def copy_images_from_source_to_destination source_folder, destination_folder, ch
     final_file_path = File.join(destination_file.realpath, final_file_basename)
 
     unless File.exists?(final_file_path)
-      FileUtils.cp file.realpath, final_file_path, verbose: true, preserve: true
-      File.utime(File.atime(final_file_path), time.to_time, final_file_path)
+      unless dry_run
+        FileUtils.cp file.realpath, final_file_path, verbose: true, preserve: true
+        File.utime(File.atime(final_file_path), time.to_time, final_file_path)
+      else
+        puts "-> Copy #{file.realpath} to #{final_file_path}"
+      end
       index = final_index
     else
       puts "-> File #{final_file_path} already exists. Aborting."
@@ -168,4 +180,4 @@ def copy_images_from_source_to_destination source_folder, destination_folder, ch
   end
 end
 
-copy_images_from_source_to_destination options.source, options.destination, !options.no_check_duplicates
+copy_images_from_source_to_destination options.source, options.destination, !options.no_check_duplicates, options.dry_run
