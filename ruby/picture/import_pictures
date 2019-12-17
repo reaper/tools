@@ -1,0 +1,222 @@
+#!/usr/bin/env ruby
+# Import pictures from a folder to another
+# Author::  Pierre FILSTROFF (mailto:pfilstroff@gmail.com)
+
+require 'pathname'
+require 'ostruct'
+require 'optparse'
+require 'fileutils'
+require 'rmagick'
+require 'date'
+require 'parallel'
+require 'logger'
+require 'digest/md5'
+require 'colorize'
+
+include Magick
+
+@logger = Logger.new(STDOUT)
+@logger.level = Logger::INFO
+
+
+## Copy images from a source directory to a destination directory
+# source_folder
+# destination_folder
+def copy_images_from_source_to_destination options
+  source_folder = options.source
+  destination_folder = options.destination
+  check_for_duplicates = !options.no_check_duplicates
+  dry_run = options.dry_run
+  check_method = options.check_method
+
+  # Check options
+  unless source_folder
+    @logger.error "Missing argument: source"
+    exit 0
+  end
+
+  unless destination_folder
+    @logger.error  "Missing argument: destination"
+    exit 0
+  end
+
+  unless check_method
+    check_method = "rmagick"
+  end
+
+  # Check existing folders
+  unless File.exists?(destination_folder)
+    destination_path = Pathname.new(destination_folder)
+    destination_folder = File.join(destination_path.parent, destination_path.basename.to_s.gsub(/\W/, '_').upcase)
+
+    unless File.exists?(destination_folder)
+      FileUtils.mkdir destination_folder, verbose: true
+    end
+  end
+
+  unless File.directory?(destination_folder)
+    @logger.info "#{destination_folder} isn't a directory"
+    exit 0
+  end
+
+  unless File.exists?(source_folder)
+    @logger.info "#{source_folder} doesn't exists"
+    exit 0
+  end
+
+  unless File.directory?(source_folder)
+    @logger.info "#{source_folder} isn't a directory"
+    exit 0
+  end
+
+  @logger.info "Source folder is #{source_folder}"
+  @logger.info "Destination folder is #{destination_folder}"
+
+  source_file = Pathname.new(source_folder)
+  destination_file = Pathname.new(destination_folder)
+
+  # Getting destination files and sort them by modified time and name
+  destination_files = Dir.glob(File.join(destination_file.realpath, '*'))
+  destination_files = destination_files.sort_by!{ |f| [File.mtime(f), File.basename(f)] }
+
+  last_file = destination_files.last
+
+  # Build a start index
+  if last_file && File.exists?(last_file)
+    last_file_basename = File.basename(last_file, File.extname(last_file))
+    matches = last_file_basename.scan(/(\d*)$/)
+    index = matches.flatten.reject! { |c| c.empty? }.first.to_i
+  else
+    index = -1
+  end
+
+  @logger.info "Last file path: #{File.basename(last_file)}" if last_file && File.exist?(last_file)
+
+  source_files = Dir.glob(File.join(source_file.realpath, '*'))
+  source_files = source_files.sort_by{ |f| File.mtime(f) }
+  ordered_source_files = []
+
+  @logger.info "Analyzing pictures and checking for duplicates..." if source_files.any?
+
+  files_in_dest = Dir.glob(File.join(destination_file.realpath, '*'))
+  files_md5_in_dest = []
+
+  for dest_file in files_in_dest
+    dest_image_md5 = Digest::MD5.file(dest_file).to_s
+    @logger.debug "MD5 for file #{dest_file} is #{dest_image_md5}"
+    files_md5_in_dest << dest_image_md5
+  end
+
+  for f in source_files do
+    file = Pathname.new(f)
+
+    if file.directory?
+      options.source = file.realpath.to_s
+      options.destination = File.join(destination_file.realpath.to_s, file.basename.to_s)
+
+      copy_images_from_source_to_destination options
+    else
+      if %w(.png .jpg .jpeg .gif .bmp).include?(file.extname.to_s.downcase)
+
+        if check_for_duplicates
+          image = Image.read(file.realpath).first
+          image_time = DateTime.parse(image.properties['date:modify'])
+
+          is_duplicate = false
+
+          if files_in_dest.any?
+            @logger.info "Searching for duplicates for image #{file.realpath}"
+
+            image_md5 = Digest::MD5.file(file.realpath).to_s
+
+            @logger.debug "MD5 for source file #{file.realpath} is #{image_md5}"
+            @logger.debug "MD5 for file #{file.realpath} is #{image_md5}"
+
+            for dest_file_md5 in files_md5_in_dest
+              is_duplicate = image_md5.eql?(dest_file_md5)
+              if is_duplicate
+                @logger.info "#{File.basename(f)} has a duplicate in the destination directory #{File.basename(dest_file)}".cyan
+                break
+              end
+            end
+          end
+
+          unless is_duplicate
+            @logger.info "#{File.basename(file)} has no duplicate, will copy it".green
+            ordered_source_files << [file, image_time]
+          end
+
+          image.destroy!
+        end
+      else
+        @logger.error "Cannot process #{File.basename(f)}: not an image".red
+      end
+    end
+  end
+
+  if ordered_source_files.any?
+    @logger.info "Copying pictures to #{destination_file.realpath}"
+
+    for f_list in ordered_source_files.sort_by {|l| l.last}
+      file = f_list.first
+      time = f_list.last
+
+      final_index = index + 1
+      final_file_basename = "#{destination_file.basename.to_s.gsub(/\W/, '_').upcase}_#{time.strftime('%Y-%m-%d')}_#{final_index}#{file.extname}"
+      final_file_path = File.join(destination_file.realpath, final_file_basename)
+
+      unless File.exists?(final_file_path)
+        unless dry_run
+          FileUtils.cp file.realpath, final_file_path, verbose: true, preserve: true
+          File.utime(File.atime(final_file_path), time.to_time, final_file_path)
+        else
+          @logger.info "Copy #{file.realpath} to #{final_file_path}"
+        end
+        index = final_index
+      else
+        @logger.info "File #{final_file_path} already exists. Aborting."
+        break
+      end
+    end
+  else
+    @logger.info "No files to copy to #{destination_file.realpath}"
+  end
+end
+
+
+
+
+
+
+options = {}
+OptionParser.new do |opts|
+  opts.banner = "Usage: example.rb [options]"
+
+  opts.on("-sSOURCE", "--source=SOURCE", "source") do |s|
+    options[:source] = s
+  end
+
+  opts.on("-dDESTINATION", "--destination=DESTINATION", "destination") do |d|
+    options[:destination] = d
+  end
+
+  opts.on("-n", "--[no-]check-duplicates", "No check for duplicates") do |n|
+    options[:no_check_duplicates] = n
+  end
+
+  opts.on("-k", "--dry-run", "Dry run, no operation is done") do |k|
+    options[:dry_run] = k
+  end
+
+  opts.on("-v", "--[no-]verbose", "Run verbosely") do |v|
+    options[:verbose] = v
+    @logger.level = Logger::DEBUG
+  end
+
+  opts.on("-cCHECK_METHOD", "--check-method=CHECK_METHOD", "check_method") do |c|
+    options[:check_method] = c
+  end
+end.parse!
+
+options = OpenStruct.new options
+copy_images_from_source_to_destination options
